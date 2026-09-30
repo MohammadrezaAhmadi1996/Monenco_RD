@@ -9,7 +9,7 @@ from typing import List, Dict
 # Setting
 # ---------------------------------
 load_dotenv()
-APP_VERSION = "نسخه 0.0.1"
+APP_VERSION = "نسخه 0.1.0"
 
 # ---------------------------------
 # Multi-standard Chatbot

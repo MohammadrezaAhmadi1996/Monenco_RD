@@ -94,7 +94,7 @@ Remember:
 def main():
     API_KEY = os.getenv("OPENAI_API_KEY")
     BASE_URL = os.getenv("OPENAI_API_BASE")
-    PDF_PATH = r"C:\Users\ahmadi.mohammadreza\Documents\GitHub\ChatBot_RT\Assets\R&T.pdf"  
+    PDF_PATH = r"C:\Users\ahmadi.mohammadreza\Documents\GitHub\Monenco_RD\Assets\R&T.pdf"  
     try:
         chatbot = PDFChatbot(
             api_key=API_KEY,

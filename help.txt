@@ -2,7 +2,7 @@
 ##########################################################################################
 ############################################# Strategy_Bot.py
 conda activate env1
-cd C:\Users\ahmadi.mohammadreza\Documents\GitHub\ChatBot_RT\ChatBots
+cd C:\Users\ahmadi.mohammadreza\Documents\GitHub\Monenco_RD\ChatBots
 python Strategy_Bot.py
 
 استراتژی های کلان شرکت چیست؟
@@ -17,7 +17,7 @@ python Strategy_Bot.py
 ##########################################################################################
 ############################################# Risk_Bot.py
 conda activate env1
-cd C:\Users\ahmadi.mohammadreza\Documents\GitHub\ChatBot_RT\ChatBots
+cd C:\Users\ahmadi.mohammadreza\Documents\GitHub\Monenco_RD\ChatBots
 python Risk_Bot.py
 
 معنی لغت ریسک چیست؟
@@ -29,14 +29,14 @@ python Risk_Bot.py
 ##########################################################################################
 ############################################# Audit_Bot.py
 conda activate env1
-cd C:\Users\ahmadi.mohammadreza\Documents\GitHub\ChatBot_RT\ChatBots
+cd C:\Users\ahmadi.mohammadreza\Documents\GitHub\Monenco_RD\ChatBots
 streamlit run Audit_Bot.py
 
 ##########################################################################################
 ##########################################################################################
 ############################################# Resume_Bot.py
 conda activate env1
-cd C:\Users\ahmadi.mohammadreza\Documents\GitHub\ChatBot_RT
+cd C:\Users\ahmadi.mohammadreza\Documents\GitHub\Monenco_RD
 streamlit run Resume_Front.py
 
 کارشناس تحقیق و توسعه

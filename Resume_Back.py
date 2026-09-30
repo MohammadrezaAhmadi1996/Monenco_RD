@@ -152,7 +152,7 @@ Be precise, professional and critical.
             model= "gpt-6-luna",    # gpt-6-luna
             messages=messages,
             temperature=0.1,
-            max_tokens=2000     # 1200  # 2000
+            max_tokens=2500     # 1200  # 2000
         )
         return response.choices[0].message.content
 
