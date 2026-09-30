@@ -3,11 +3,10 @@ import re
 from openai import OpenAI
 from pypdf import PdfReader
 from pathlib import Path
-import math
 from io import BytesIO
 from functools import lru_cache
 from docx import Document
-from docx.shared import Pt, Cm, Emu, RGBColor
+from docx.shared import Pt, Cm, RGBColor
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -97,16 +96,25 @@ Evaluation rules:
 2. You must NOT introduce additional competencies.
 3. You must rely only on the resume content and the provided competencies.
 4. If a competency is not evidenced in the resume, clearly state it is not demonstrated.
+5. Every strength and weakness you report must be judged RELATIVE to this specific job position and the
+   provided competencies, never in absolute or general terms. A fact from the resume that would be impressive
+   or concerning in general, but is unrelated to this job position and these competencies, must NOT be reported
+   as a strength or a weakness (for example, an outstanding GPA in a field unrelated to a software-engineering
+   position is not a strength for that position, even though a high GPA is impressive in general).
 
 Your output must be written in Persian.
 
 Your response must follow exactly this structure:
 
 Paragraph 1:
-A short overall evaluation (about 4 to 6 sentences) of the candidate's suitability for the role.
-This paragraph must explicitly refer to the candidate's previous work experience, emphasizing the projects
-the candidate has participated in and the skills the candidate has acquired through them.
-If the resume does not demonstrate such experience, projects or skills, clearly state that.
+A thorough and detailed overall evaluation of the candidate's suitability for the role. There is no length
+limit: write as many sentences as needed to fully and completely cover the candidate's relevant educational
+background, technical skills and work history, so that a reader would not need to go back to the original
+resume file to learn any important, job-relevant point. This paragraph must explicitly discuss the candidate's
+previous work experience, emphasizing the projects the candidate has participated in and the skills the
+candidate has acquired through them. If the resume does not demonstrate such experience, projects or skills,
+clearly state that. Do not include facts that are not relevant to this job position or the provided
+competencies (see rule 5 above).
 
 Paragraph 2:
 A competency-by-competency assessment in bullet points.
@@ -124,10 +132,13 @@ within that criterion only. If a criterion is not evidenced in the resume, give 
 Do NOT compute or mention any overall score.
 
 Paragraph 4:
-A section titled "نقاط قوت رزومه" listing the strongest points.
+A section titled "نقاط قوت رزومه" listing the strongest points. List a point here only if it is genuinely
+relevant to this job position and the provided competencies (see rule 5 above); omit anything impressive
+that is unrelated to them.
 
 Paragraph 5:
-A section titled "نقاط ضعف رزومه" listing the weakest areas.
+A section titled "نقاط ضعف رزومه" listing the weakest areas, identified the same way: only weaknesses that
+matter for this specific job position and the provided competencies (see rule 5 above).
 
 Do not use any headings or titles other than "نقاط قوت رزومه" and "نقاط ضعف رزومه".
 Do not mention that you are an AI model.
@@ -152,7 +163,7 @@ Be precise, professional and critical.
             model= "gpt-6-luna",    # gpt-6-luna
             messages=messages,
             temperature=0.1,
-            max_tokens=2500     # 1200  # 2000
+            max_tokens=2000     # 1200  # 2000
         )
         return response.choices[0].message.content
 
@@ -170,8 +181,6 @@ REPORT_FONT_PATH     = Path.cwd() / "Assets/BKoodkBd.ttf"           # همان �
 REPORT_FONT_SIZE_PT  = 13                                           # اندازه فونت گزارش
 REPORT_LINE_PT       = 22                                           # ارتفاع ثابت هر خط (نقطه)
 REPORT_GAP_PT        = 4                                            # فاصله بعد از هر پاراگراف (نقطه)
-REPORT_SLACK_PT      = 40                                           # حاشیه اطمینان ارتفاع صفحه (نقطه)
-REPORT_CHAR_PT       = 7.2                                          # تخمین محافظه‌کارانه عرض هر نویسه (نقطه)
 REPORT_HEAD_COLOR    = RGBColor(0x1F, 0x38, 0x64)                   # سرمه‌ای (هم‌رنگ فیلدهای فرانت)
 REPORT_GREEN_COLOR   = RGBColor(0x1E, 0x8E, 0x3E)                   # سبز: نقاط قوت
 REPORT_RED_COLOR     = RGBColor(0xC0, 0x39, 0x2B)                   # قرمز: نقاط ضعف
@@ -225,14 +234,15 @@ def _style_run(run, color=None):
     rPr.append(OxmlElement("w:rtl"))
 
 
-def _add_par(container, text="", color=None, bullet=False, first=None, justify=False):
-    """پاراگراف راست‌به‌چپ با ارتفاع خط ثابت؛ ارتفاع ثابت باعث می‌شود جانمایی صفحه قابل پیش‌بینی باشد."""
-    p = first if first is not None else container.add_paragraph()
+def _add_par(container, text="", color=None, bullet=False, justify=False, page_break=False):
+    """پاراگراف راست‌به‌چپ؛ در صورت page_break=True از ابتدای یک صفحه‌ی جدید شروع می‌شود."""
+    p = container.add_paragraph()
     p._p.get_or_add_pPr().insert_element_before(OxmlElement("w:bidi"), *_PPR_AFTER_BIDI)
     pf = p.paragraph_format
     pf.space_before = Pt(0)
     pf.space_after = Pt(REPORT_GAP_PT)
     pf.line_spacing = Pt(REPORT_LINE_PT)
+    pf.page_break_before = page_break
     if justify:
         pf.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     if bullet:
@@ -241,17 +251,6 @@ def _add_par(container, text="", color=None, bullet=False, first=None, justify=F
         text = "•\t" + text
     if text:
         _style_run(p.add_run(text), color)
-    return p
-
-
-def _tiny_par(doc, page_break=False):
-    """پاراگراف ۱ نقطه‌ای: جداکننده‌ی صفحه‌ها و پاراگراف پایانی الزامی بعد از جدول."""
-    p = doc.add_paragraph()
-    pf = p.paragraph_format
-    pf.space_before = Pt(0)
-    pf.space_after = Pt(0)
-    pf.line_spacing = Pt(1)
-    pf.page_break_before = page_break
     return p
 
 
@@ -282,38 +281,12 @@ def _parse_resume_analysis(text: str):
     return " ".join(_split_items(re.sub(r"(?im)^\s*[*_]*(NAME|TECH|EXP|EDU|PROJ)\b.*$", "", text))), [], []
 
 
-def _truncate(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    cut = text[:max(max_chars - 1, 1)].rsplit(" ", 1)[0].rstrip("،,.;:- ")
-    return cut + "…"
-
-
-def _fit_items(items, cpl, budget_pt, indent=0):
-    """آیتم‌ها را تا سقف ارتفاع مجاز جا می‌دهد؛ آیتم آخر در صورت نیاز کوتاه می‌شود."""
-    eff = max(cpl - indent, 1)
-    fitted, used = [], 0
-    for it in items:
-        cost = math.ceil(len(it) / eff) * REPORT_LINE_PT + REPORT_GAP_PT
-        if used + cost <= budget_pt:
-            fitted.append(it)
-            used += cost
-            continue
-        room = int((budget_pt - used - REPORT_GAP_PT) // REPORT_LINE_PT)
-        if room >= 1:
-            t = _truncate(it, room * eff)
-            fitted.append(t)
-            used += math.ceil(len(t) / eff) * REPORT_LINE_PT + REPORT_GAP_PT
-        break
-    return fitted, used
-
-
 def build_resume_report(ranked_results) -> BytesIO:
     """
     گزارش تحلیلی Word را از روی تمپلیت خام می‌سازد.
     ranked_results: فهرست نتایج به ترتیب رتبه (همان ترتیب فایل Excel).
-    هر رزومه دقیقاً یک صفحه: یک جدول تک‌سلولی با ارتفاع «دقیق» (exact) که هم از سرریز به صفحه بعد
-    جلوگیری می‌کند و هم با شکست صفحه‌ی اجباری، هر رزومه را در صفحه‌ی مستقل قرار می‌دهد.
+    هر رزومه دقیقاً از ابتدای یک صفحه‌ی جدید شروع می‌شود (با شکست صفحه‌ی اجباری پیش از آن)، اما دیگر به
+    یک صفحه محدود نیست: تحلیل می‌تواند به هر تعداد صفحه که برای پوشش کامل مطالب لازم است ادامه پیدا کند.
     """
     doc = Document(str(REPORT_TEMPLATE_PATH))
 
@@ -326,59 +299,28 @@ def build_resume_report(ranked_results) -> BytesIO:
         for p in list(doc.paragraphs):
             p._element.getparent().remove(p._element)
 
-    sec = doc.sections[-1]
-    text_w = Emu(sec.page_width - sec.left_margin - sec.right_margin)
-    page_h_pt = Emu(sec.page_height - sec.top_margin - sec.bottom_margin).pt - REPORT_SLACK_PT
-    cpl = int((text_w.pt - 30) / REPORT_CHAR_PT)
-    content_pt = page_h_pt - 12
-
     for idx, r in enumerate(ranked_results, start=1):
-        if idx > 1 or has_content:
-            _tiny_par(doc, page_break=True)
-
-        table = doc.add_table(rows=1, cols=1)
-        table.autofit = False
-        table.columns[0].width = text_w
-        row = table.rows[0]
-        trPr = row._tr.get_or_add_trPr()
-        trPr.append(OxmlElement("w:cantSplit"))
-        h = OxmlElement("w:trHeight")
-        h.set(qn("w:val"), str(int(page_h_pt * 20)))
-        h.set(qn("w:hRule"), "exact")
-        trPr.append(h)
-        cell = row.cells[0]
-        cell.width = text_w
-
         overall, strengths, weaknesses = _parse_resume_analysis(r.get("result_text", ""))
-        name_line = f"نام فایل رزومه: {r['file_name']}"
         applicant_line = f"نام متقاضی: {r.get('applicant_name', '-')}"
+        name_line = f"نام فایل رزومه: {r['file_name']}"
         level_line = f"سطح ارزیابی: {get_score_level(r['score_raw'])}"
-        head_lines = [f"رتبه: {idx}", name_line, applicant_line, f"نمره ارزیابی: {r['score_raw']} از 100", level_line]
-        head_pt = sum(math.ceil(len(t) / cpl) * REPORT_LINE_PT + REPORT_GAP_PT for t in head_lines)
-        heading_pt = 3 * (REPORT_LINE_PT + REPORT_GAP_PT)
-        remaining = content_pt - head_pt - heading_pt
 
-        ov, used_o = _fit_items([overall] if overall else [], cpl, remaining * 0.40)
-        rem = remaining - used_o
-        st_items, used_s = _fit_items(strengths, cpl, rem / 2, indent=3)
-        wk_items, _ = _fit_items(weaknesses, cpl, rem - used_s, indent=3)
+        _add_par(doc, f"رتبه: {idx}", color=REPORT_HEAD_COLOR, page_break=(idx > 1 or has_content))
+        _add_par(doc, name_line)
+        _add_par(doc, applicant_line)
+        _add_par(doc, f"نمره ارزیابی: {r['score_raw']} از 100", color=REPORT_HEAD_COLOR)
+        _add_par(doc, level_line, color=REPORT_HEAD_COLOR)
 
-        _add_par(cell, head_lines[0], color=REPORT_HEAD_COLOR, first=cell.paragraphs[0])
-        _add_par(cell, head_lines[1])
-        _add_par(cell, head_lines[2])
-        _add_par(cell, head_lines[3], color=REPORT_HEAD_COLOR)
-        _add_par(cell, head_lines[4], color=REPORT_HEAD_COLOR)
+        _add_par(doc, "تحلیل کلی رزومه", color=REPORT_HEAD_COLOR)
+        _add_par(doc, overall or "موردی ثبت نشده است.", justify=True)
 
-        _add_par(cell, "تحلیل کلی رزومه", color=REPORT_HEAD_COLOR)
-        _add_par(cell, ov[0] if ov else "موردی ثبت نشده است.", justify=True)
-        _add_par(cell, "نقاط قوت رزومه", color=REPORT_GREEN_COLOR)
-        for t in (st_items or ["موردی ثبت نشده است."]):
-            _add_par(cell, t, color=REPORT_GREEN_COLOR, bullet=True)
-        _add_par(cell, "نقاط ضعف رزومه", color=REPORT_RED_COLOR)
-        for t in (wk_items or ["موردی ثبت نشده است."]):
-            _add_par(cell, t, color=REPORT_RED_COLOR, bullet=True)
+        _add_par(doc, "نقاط قوت رزومه", color=REPORT_GREEN_COLOR)
+        for t in (strengths or ["موردی ثبت نشده است."]):
+            _add_par(doc, t, color=REPORT_GREEN_COLOR, bullet=True)
 
-    _tiny_par(doc)   # پاراگراف پایانی الزامی پس از آخرین جدول
+        _add_par(doc, "نقاط ضعف رزومه", color=REPORT_RED_COLOR)
+        for t in (weaknesses or ["موردی ثبت نشده است."]):
+            _add_par(doc, t, color=REPORT_RED_COLOR, bullet=True)
 
     out = BytesIO()
     doc.save(out)
