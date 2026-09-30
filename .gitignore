@@ -1,0 +1,32 @@
+*.pyc
+*.csv
+*.xlsx
+*.vs
+*.vscode
+
+# Virtual environments
+venv/
+env/
+.spyproject/
+*.spyproject
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+pdf_data/
+
+# Package files
+*.egg-info/
+dist/
+build/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.json
+*.bak
+*.ini
+*.env
