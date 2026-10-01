@@ -1,5 +1,9 @@
 import os
 import json
+import uuid
+import pandas as pd
+import tempfile
+from pathlib import Path
 from io import BytesIO
 import streamlit as st
 from dotenv import load_dotenv
@@ -26,6 +30,107 @@ PURPLE = "#782DBE"
 BLUE   = "#0064B2"
 GOLD   = "#BF9000"
 NAVY   = "#1F3864"   # رنگ سرمه‌ای برای فیلدهای اطلاعات شغلی
+
+# =============================================
+# Interview page helpers
+# =============================================
+INTERVIEW_STATE_DIR = Path(tempfile.gettempdir()) / "resume_interview_states"
+INTERVIEW_STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _create_interview_state(payload):
+    token = uuid.uuid4().hex
+    (INTERVIEW_STATE_DIR / (token + ".json")).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return token
+
+def _load_interview_state(token):
+    if not token or not token.isalnum() or len(token) != 32:
+        return None
+    path = INTERVIEW_STATE_DIR / (token + ".json")
+    if not path.exists(): return None
+    try: return json.loads(path.read_text(encoding="utf-8"))
+    except Exception: return None
+
+def _render_interview_system(payload):
+    job_title = payload.get("job_title", "")
+    competencies_text = payload.get("competencies_text", "")
+    valid_sorted = payload.get("valid_sorted", [])
+    st.markdown('<div class="hero"><div class="hero-box"><div class="hero-row">' +
+                f'<div class="hero-logo"><img src="data:image/png;base64,{logo_base64}" width="120"></div>' +
+                '<div class="hero-titles"><h1>سامانه هوشمند <span>تولید سوالات مصاحبه استخدام</span></h1>' +
+                '<div class="hero-sub">طراحی سوالات عمومی، رفتاری و تخصصی مبتنی بر شایستگی‌ها و رزومه متقاضیان منتخب</div>' +
+                '</div></div></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">سامانه هوشمند تولید سوالات مصاحبه استخدام</div>', unsafe_allow_html=True)
+    st.caption(f"موقعیت شغلی: {job_title}", text_alignment = "right")
+    if not valid_sorted:
+        st.warning("اطلاعات رزومه‌های منتخب برای طراحی سوالات در دسترس نیست.")
+        st.stop()
+    qcol1, qcol2, qcol3, qcol4 = st.columns(4)
+    with qcol1: common_ai_count = st.number_input("تعداد سوال دسته ۱", 3, 20, 10, 1, key="interview_common_ai_count")
+    with qcol2: common_behavior_count = st.number_input("تعداد سوال دسته ۲", 3, 20, 8, 1, key="interview_common_behavior_count")
+    with qcol3: competency_q_count = st.number_input("تعداد سوال دسته ۳", 3, 20, 8, 1, key="interview_competency_count")
+    with qcol4: resume_q_count = st.number_input("تعداد سوال دسته ۴", 3, 20, 8, 1, key="interview_resume_count")
+    st.markdown("**متقاضیان منتخب مصاحبه**", text_alignment = "center")
+    options = [f"{i+1}. {r.get('applicant_name','-')} — {r['file_name']} — امتیاز {r['score_raw']}" for i, r in enumerate(valid_sorted)]
+    selected_labels = st.multiselect("رزومه‌های منتخب (پیش‌فرض: ۵ رتبه اول)", options=options, default=options[:min(5, len(options))], key="interview_page_selected_labels")
+    selected_files = {label.split(" — ")[1].split(" — امتیاز")[0] for label in selected_labels}
+    selected_candidates = [r for r in valid_sorted if r["file_name"] in selected_files]
+    if st.button("۱) تولید سوالات عمومی مشترک", use_container_width=True, type="secondary", key="interview_generate_common"):
+        with st.spinner("در حال طراحی سوالات عمومی مشترک ..."):
+            try:
+                st.session_state.common_interview_questions = st.session_state.interview_bot.generate_common_questions(job_title=job_title, competencies=competencies_text, general_count=int(common_ai_count), behavioral_count=int(common_behavior_count))
+                st.success("سوالات دسته‌های ۱ و ۲ تولید شدند.")
+            except Exception as e: st.error(f"تولید سوالات عمومی با خطا مواجه شد: {e}")
+    common_q = st.session_state.get("common_interview_questions", {})
+    if common_q:
+        st.markdown("### سوالات عمومی مشترک")
+        tab1, tab2 = st.tabs(["دسته ۱: دانش عمومی AI", "دسته ۲: رفتاری و حرفه‌ای"])
+        for tab, key in [(tab1, "general_ai"), (tab2, "behavioral")]:
+            with tab:
+                for i, item in enumerate(common_q.get(key, []), 1):
+                    st.markdown(f"**{i}. {item['question']}**")
+                    st.caption(f"هدف: {item.get('purpose','')} | محور ارزیابی: {item.get('assessment_focus','')}")
+                    if item.get("follow_up"): st.caption(f"پیگیری: {item['follow_up']}")
+    if st.button("۲) تولید سوالات تخصصی اختصاصی رزومه‌های منتخب", use_container_width=True, type="primary", key="interview_generate_personalized", disabled=(not selected_candidates or not common_q)):
+        st.session_state.personalized_interview_questions = {}
+        general_context = json.dumps(common_q, ensure_ascii=False)
+        progress = st.progress(0)
+        for idx, candidate in enumerate(selected_candidates):
+            try:
+                q = st.session_state.interview_bot.generate_personalized_questions(job_title=job_title, competencies=competencies_text, resume_text=candidate.get("resume_text", ""), general_context=general_context, competency_count=int(competency_q_count), resume_count=int(resume_q_count))
+                st.session_state.personalized_interview_questions[candidate["file_name"]] = q
+            except Exception as e: st.error(f"تولید سوال برای {candidate['file_name']} با خطا مواجه شد: {e}")
+            progress.progress((idx + 1) / len(selected_candidates))
+        st.session_state.selected_candidates = [r["file_name"] for r in selected_candidates]
+        st.session_state.interview_done = True
+        st.rerun()
+    personalized = st.session_state.get("personalized_interview_questions", {})
+    if personalized:
+        st.markdown("### سوالات تخصصی اختصاصی متقاضیان منتخب")
+        view_candidates = [r for r in selected_candidates if r["file_name"] in personalized]
+        labels = [f"{r.get('applicant_name','-')} — {r['file_name']} — امتیاز {r['score_raw']}" for r in view_candidates]
+        chosen_label = st.selectbox("متقاضی موردنظر برای مشاهده سوالات", labels, key="interview_candidate_view_page")
+        chosen_file = chosen_label.split(" — ")[1].split(" — امتیاز")[0]
+        q = personalized[chosen_file]
+        st.markdown("#### دسته ۳: سوالات تخصصی شایستگی‌های شغلی")
+        for i, item in enumerate(q.get("competency", []), 1):
+            st.markdown(f"**{i}. {item['question']}**")
+            st.caption(f"هدف: {item.get('purpose','')} | محور ارزیابی: {item.get('assessment_focus','')}")
+            if item.get("follow_up"): st.caption(f"پیگیری: {item['follow_up']}")
+        st.markdown("#### دسته ۴: سوالات تخصصی مبتنی بر رزومه")
+        for i, item in enumerate(q.get("resume", []), 1):
+            st.markdown(f"**{i}. {item['question']}**")
+            st.caption(f"هدف: {item.get('purpose','')} | محور ارزیابی: {item.get('assessment_focus','')}")
+            if item.get("follow_up"): st.caption(f"پیگیری: {item['follow_up']}")
+        chosen_record = next(r for r in view_candidates if r["file_name"] == chosen_file)
+        report = build_interview_report(chosen_record.get("applicant_name","-"), chosen_file, common_q, q)
+        st.download_button("دانلود گزارش Word سوالات این متقاضی", report, file_name=f"interview_questions_{chosen_file.rsplit('.',1)[0]}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key="interview_download_word")
+        excel_rows = []
+        for r in view_candidates: excel_rows.extend(flatten_interview_questions(common_q, personalized[r["file_name"]], r.get("applicant_name","-"), r["file_name"]))
+        q_output = BytesIO(); q_df = pd.DataFrame(excel_rows)
+        with pd.ExcelWriter(q_output, engine="openpyxl") as writer:
+            q_df.to_excel(writer, index=False, sheet_name="سوالات مصاحبه"); style_excel_sheet(writer.sheets["سوالات مصاحبه"])
+        q_output.seek(0)
+        st.download_button("دانلود Excel سوالات مصاحبه همه متقاضیان منتخب", q_output, file_name="interview_questions_selected_candidates.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="interview_download_excel")
 
 # =============================================
 # Global Style (light theme) + Hero
@@ -331,6 +436,23 @@ if "bot" not in st.session_state:
 
 if "last_result" not in st.session_state:
     st.session_state.last_result = ""
+
+if "interview_bot" not in st.session_state:
+    API_KEY = os.getenv("OPENAI_API_KEY")
+    BASE_URL = os.getenv("OPENAI_API_BASE")
+    if not API_KEY or not BASE_URL:
+        st.error("عدم اتصال به سرویس هوش مصنوعی.")
+        st.stop()
+    st.session_state.interview_bot = InterviewQuestionGenerator(api_key=API_KEY, base_url=BASE_URL)
+
+_query = st.query_params
+if _query.get("page") == "interview":
+    _payload = _load_interview_state(_query.get("token"))
+    if _payload is None:
+        st.error("اطلاعات این جلسه‌ی مصاحبه پیدا نشد یا منقضی شده است. لطفاً از صفحه‌ی رتبه‌بندی دوباره وارد سامانه شوید.")
+        st.stop()
+    _render_interview_system(_payload)
+    st.stop()
 if "common_interview_questions" not in st.session_state:
     st.session_state.common_interview_questions = {}
 if "personalized_interview_questions" not in st.session_state:
@@ -339,7 +461,6 @@ if "selected_candidates" not in st.session_state:
     st.session_state.selected_candidates = []
 if "interview_done" not in st.session_state:
     st.session_state.interview_done = False
-    st.session_state.interview_bot = InterviewQuestionGenerator(api_key=API_KEY, base_url=BASE_URL)
 
 # اعمال ضرایب نرمال‌شده روی اسلایدرها؛ این کار باید همین‌جا و پیش از ساخته‌شدن خود اسلایدرها انجام شود،
 # چون Streamlit اجازه نمی‌دهد مقدار session_state یک ویجت بعد از ساخته‌شدنش در همان اجرا تغییر کند.
@@ -612,122 +733,21 @@ if st.session_state.get("last_result") == "batch_done" and st.session_state.get(
             st.error(f"ساخت گزارش با خطا مواجه شد: {e}")
 
 # ==========================================================================================
-# Phase 2: Interview Question Design
+# ورود به سامانه مستقل تولید سوالات مصاحبه
 # ==========================================================================================
 if st.session_state.get("last_result") == "batch_done" and st.session_state.get("batch_results"):
-    st.markdown("---")
-    st.markdown('<div class="section-title">فاز دوم پروژه: طراحی سوالات مصاحبه حضوری</div>', unsafe_allow_html=True)
     batch = st.session_state.batch_results
-    valid_sorted = sorted([r for r in batch if r.get("score_raw", -1) >= 0],
-                          key=lambda x: x["score_raw"], reverse=True)
-
+    valid_sorted = sorted([r for r in batch if r.get("score_raw", -1) >= 0], key=lambda x: x["score_raw"], reverse=True)
     if valid_sorted:
-        st.info("سوالات دسته‌های ۱ و ۲ یک‌بار و به‌صورت مشترک برای همه متقاضیان منتخب تولید می‌شوند. "
-                "سوالات دسته‌های ۳ و ۴ برای هر رزومه به‌صورت اختصاصی و مبتنی بر شواهد همان رزومه تولید می‌شوند.")
-
-        qcol1, qcol2, qcol3, qcol4 = st.columns(4)
-        with qcol1:
-            common_ai_count = st.number_input("تعداد سوال دسته ۱", 3, 20, 10, 1)
-        with qcol2:
-            common_behavior_count = st.number_input("تعداد سوال دسته ۲", 3, 20, 8, 1)
-        with qcol3:
-            competency_q_count = st.number_input("تعداد سوال دسته ۳", 3, 20, 8, 1)
-        with qcol4:
-            resume_q_count = st.number_input("تعداد سوال دسته ۴", 3, 20, 8, 1)
-
-        st.markdown("**انتخاب متقاضیان برای مصاحبه**")
-        options = [f"{i+1}. {r.get('applicant_name','-')} — {r['file_name']} — امتیاز {r['score_raw']}"
-                   for i, r in enumerate(valid_sorted)]
-        default_top = min(5, len(options))
-        selected_labels = st.multiselect(
-            "رزومه‌های منتخب (پیش‌فرض: ۵ رتبه اول)",
-            options=options, default=options[:default_top], key="selected_interview_labels")
-        selected_files = {label.split(" — ")[1].split(" — امتیاز")[0] for label in selected_labels}
-        selected_candidates = [r for r in valid_sorted if r["file_name"] in selected_files]
-
-        if st.button("۱) تولید سوالات عمومی مشترک", use_container_width=True, type="secondary"):
-            with st.spinner("در حال طراحی سوالات عمومی مشترک ..."):
-                try:
-                    st.session_state.common_interview_questions = st.session_state.interview_bot.generate_common_questions(
-                        job_title=job_title, competencies=competencies_text,
-                        general_count=int(common_ai_count), behavioral_count=int(common_behavior_count))
-                    st.success("سوالات دسته‌های ۱ و ۲ تولید شدند.")
-                except Exception as e:
-                    st.error(f"تولید سوالات عمومی با خطا مواجه شد: {e}")
-
-        common_q = st.session_state.get("common_interview_questions", {})
-        if common_q:
-            st.markdown("### سوالات عمومی مشترک")
-            tab1, tab2 = st.tabs(["دسته ۱: دانش عمومی AI", "دسته ۲: رفتاری و حرفه‌ای"])
-            for tab, key in [(tab1, "general_ai"), (tab2, "behavioral")]:
-                with tab:
-                    for i, item in enumerate(common_q.get(key, []), 1):
-                        st.markdown(f"**{i}. {item['question']}**")
-                        st.caption(f"هدف: {item.get('purpose','')} | محور ارزیابی: {item.get('assessment_focus','')}")
-                        if item.get("follow_up"):
-                            st.caption(f"پیگیری: {item['follow_up']}")
-
-        if st.button("۲) تولید سوالات تخصصی اختصاصی رزومه‌های منتخب",
-                     use_container_width=True, type="primary",
-                     disabled=(not selected_candidates or not common_q)):
-            st.session_state.personalized_interview_questions = {}
-            general_context = json.dumps(common_q, ensure_ascii=False)
-            progress = st.progress(0)
-            for idx, candidate in enumerate(selected_candidates):
-                try:
-                    q = st.session_state.interview_bot.generate_personalized_questions(
-                        job_title=job_title, competencies=competencies_text,
-                        resume_text=candidate.get("resume_text", ""),
-                        general_context=general_context,
-                        competency_count=int(competency_q_count),
-                        resume_count=int(resume_q_count))
-                    st.session_state.personalized_interview_questions[candidate["file_name"]] = q
-                except Exception as e:
-                    st.error(f"تولید سوال برای {candidate['file_name']} با خطا مواجه شد: {e}")
-                progress.progress((idx + 1) / len(selected_candidates))
-            st.session_state.selected_candidates = [r["file_name"] for r in selected_candidates]
-            st.session_state.interview_done = True
-            st.rerun()
-
-        personalized = st.session_state.get("personalized_interview_questions", {})
-        if personalized:
-            st.markdown("### سوالات تخصصی اختصاصی متقاضیان منتخب")
-            view_candidates = [r for r in selected_candidates if r["file_name"] in personalized]
-            labels = [f"{r.get('applicant_name','-')} — {r['file_name']} — امتیاز {r['score_raw']}" for r in view_candidates]
-            chosen_label = st.selectbox("متقاضی موردنظر برای مشاهده سوالات", labels, key="interview_candidate_view")
-            chosen_file = chosen_label.split(" — ")[1].split(" — امتیاز")[0]
-            q = personalized[chosen_file]
-
-            st.markdown("#### دسته ۳: سوالات تخصصی شایستگی‌های شغلی")
-            for i, item in enumerate(q.get("competency", []), 1):
-                st.markdown(f"**{i}. {item['question']}**")
-                st.caption(f"هدف: {item.get('purpose','')} | محور ارزیابی: {item.get('assessment_focus','')}")
-                if item.get("follow_up"): st.caption(f"پیگیری: {item['follow_up']}")
-
-            st.markdown("#### دسته ۴: سوالات تخصصی مبتنی بر رزومه")
-            for i, item in enumerate(q.get("resume", []), 1):
-                st.markdown(f"**{i}. {item['question']}**")
-                st.caption(f"هدف: {item.get('purpose','')} | محور ارزیابی: {item.get('assessment_focus','')}")
-                if item.get("follow_up"): st.caption(f"پیگیری: {item['follow_up']}")
-
-            chosen_record = next(r for r in view_candidates if r["file_name"] == chosen_file)
-            report = build_interview_report(chosen_record.get("applicant_name","-"), chosen_file, common_q, q)
-            st.download_button("دانلود گزارش Word سوالات این متقاضی", report,
-                               file_name=f"interview_questions_{chosen_file.rsplit('.',1)[0]}.docx",
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                               use_container_width=True)
-
-            excel_rows = []
-            for r in view_candidates:
-                excel_rows.extend(flatten_interview_questions(
-                    common_q, personalized[r["file_name"]], r.get("applicant_name","-"), r["file_name"]))
-            q_output = BytesIO()
-            q_df = pd.DataFrame(excel_rows)
-            with pd.ExcelWriter(q_output, engine="openpyxl") as writer:
-                q_df.to_excel(writer, index=False, sheet_name="سوالات مصاحبه")
-                style_excel_sheet(writer.sheets["سوالات مصاحبه"])
-            q_output.seek(0)
-            st.download_button("دانلود Excel سوالات مصاحبه همه متقاضیان منتخب", q_output,
-                               file_name="interview_questions_selected_candidates.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+        _interview_payload = {"job_title": job_title, "competencies_text": competencies_text, "valid_sorted": valid_sorted}
+        _interview_token = st.session_state.get("interview_page_token")
+        if not _interview_token:
+            _interview_token = _create_interview_state(_interview_payload)
+            st.session_state.interview_page_token = _interview_token
+        else:
+            try:
+                (INTERVIEW_STATE_DIR / (_interview_token + ".json")).write_text(json.dumps(_interview_payload, ensure_ascii=False), encoding="utf-8")
+            except Exception: pass
+        _href = "?page=interview&token=" + _interview_token
+        _html = '<div style="margin-top:14px;"><a href="' + _href + '" target="_blank" rel="noopener noreferrer" style="display:block;width:100%;padding:14px 20px;border-radius:12px;background:linear-gradient(135deg,#782DBE,#0064B2);color:#fff;text-decoration:none;text-align:center;font-weight:800;font-size:1.05rem;box-shadow:0 5px 16px rgba(0,100,178,.18);">ورود به سامانه هوشمند تولید سوالات مصاحبه استخدام</a></div>'
+        st.markdown(_html, unsafe_allow_html=True)
